@@ -1,18 +1,7 @@
 FROM python:3.11-slim
 
-# faster-whisper এর 'av' ডিপেন্ডেন্সি কম্পাইল করতে এই সিস্টেম লাইব্রেরিগুলো দরকার
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libavformat-dev \
-    libavcodec-dev \
-    libavdevice-dev \
-    libavutil-dev \
-    libavfilter-dev \
-    libswscale-dev \
-    libswresample-dev \
-    pkg-config \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# youtube-transcript-api ব্যবহার হচ্ছে, তাই ffmpeg/av লাইব্রেরি আর দরকার নেই।
+# এতে Docker ইমেজ অনেক ছোট ও দ্রুত বিল্ড হবে।
 
 WORKDIR /app
 

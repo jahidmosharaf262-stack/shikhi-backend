@@ -1,107 +1,80 @@
 """
-YouTube/Facebook ভিডিও থেকে অডিও ডাউনলোড করে Whisper দিয়ে ট্রান্সক্রিপ্ট বের করা হয়।
-faster-whisper ব্যবহার করা হয়েছে কারণ এটা CPU-তেও তুলনামূলক দ্রুত।
+YouTube ভিডিও থেকে সরাসরি সাবটাইটেল/ট্রান্সক্রিপ্ট সংগ্রহ।
+youtube-transcript-api ব্যবহার করা হয়েছে — অডিও ডাউনলোড বা Whisper-এর দরকার নেই।
+এটা অনেক দ্রুত, হালকা, এবং Railway-এর ফ্রি টিয়ারেও চলে।
 """
-import os
-import tempfile
-import uuid
+import re
+import logging
 
-import yt_dlp
-from faster_whisper import WhisperModel
+from youtube_transcript_api import YouTubeTranscriptApi
 
-# "base" মডেল দিয়ে শুরু করা ভালো — গতি ও কোয়ালিটির মধ্যে ব্যালেন্স।
-# সার্ভারে RAM/CPU বেশি থাকলে "small" বা "medium" ব্যবহার করতে পারেন আরও ভালো ফলাফলের জন্য।
-_WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
-_model = None
-
-# YouTube মাঝে মাঝে cloud/datacenter IP (যেমন Railway) থেকে আসা রিকোয়েস্ট বট মনে করে
-# ব্লক করে "Please sign in" এরর দেয়। এটা এড়াতে ব্রাউজার থেকে এক্সপোর্ট করা কুকি
-# ব্যবহার করা হয় — Railway Variables-এ YTDLP_COOKIES নামে বসাতে হবে।
-_COOKIES_ENV_VAR = "YTDLP_COOKIES"
-_cookies_file_path = None
+logger = logging.getLogger(__name__)
 
 
-def _get_cookies_file() -> str | None:
-    """YTDLP_COOKIES env var থেকে কুকি পড়ে একটা temp ফাইলে লিখে সেই পাথ ফেরত দেয়।
-    env var সেট না থাকলে None ফেরত দেয় (তখন yt-dlp কুকি ছাড়াই চেষ্টা করবে)।
+def extract_video_id(url: str) -> str | None:
+    """YouTube URL থেকে ১১-ক্যারেক্টারের video ID বের করা।
+    সাপোর্টেড ফরম্যাট:
+      - https://www.youtube.com/watch?v=XXXXX
+      - https://youtu.be/XXXXX
+      - https://www.youtube.com/embed/XXXXX
+      - https://www.youtube.com/v/XXXXX
     """
-    global _cookies_file_path
-    if _cookies_file_path and os.path.exists(_cookies_file_path):
-        return _cookies_file_path
-
-    cookies_content = os.getenv(_COOKIES_ENV_VAR)
-    if not cookies_content:
-        return None
-
-    fd, path = tempfile.mkstemp(suffix=".txt")
-    with os.fdopen(fd, "w") as f:
-        f.write(cookies_content)
-    _cookies_file_path = path
-    return path
-
-
-def _get_model() -> WhisperModel:
-    global _model
-    if _model is None:
-        _model = WhisperModel(_WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
-    return _model
-
-
-def download_audio(video_url: str) -> str:
-    """yt-dlp দিয়ে অডিও ডাউনলোড করে temp ফাইল পাথ ফেরত দেয়।"""
-    out_dir = tempfile.mkdtemp()
-    out_path = os.path.join(out_dir, f"{uuid.uuid4()}.%(ext)s")
-
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": out_path,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
-        }],
-        "quiet": True,
-        "no_warnings": True,
-        # প্রতিবার নতুন ব্রাউজারের মতো user-agent পাঠানো bot-detection কমাতে সাহায্য করে
-        "user_agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-    }
-
-    cookies_path = _get_cookies_file()
-    if cookies_path:
-        ydl_opts["cookiefile"] = cookies_path
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([video_url])
-
-    # postprocessor .mp3 এক্সটেনশনে সেভ করে
-    mp3_path = out_path.replace("%(ext)s", "mp3")
-    if not os.path.exists(mp3_path):
-        # fallback: ডিরেক্টরিতে যা পাওয়া যায় তাই খুঁজে বের করা
-        for f in os.listdir(out_dir):
-            if f.endswith(".mp3"):
-                mp3_path = os.path.join(out_dir, f)
-                break
-    return mp3_path
-
-
-def transcribe_audio(audio_path: str) -> str:
-    model = _get_model()
-    segments, _info = model.transcribe(audio_path, language=None, vad_filter=True)
-    text = " ".join(seg.text.strip() for seg in segments)
-    return text.strip()
+    patterns = [
+        r"(?:v=|/v/|youtu\.be/|/embed/)([a-zA-Z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
 
 
 def transcribe_video(video_url: str) -> str:
-    """ফুল পাইপলাইন: লিংক -> অডিও -> ট্রান্সক্রিপ্ট। ব্যর্থ হলে exception raise করে।"""
-    audio_path = download_audio(video_url)
+    """YouTube সাবটাইটেল থেকে ট্রান্সক্রিপ্ট নেওয়া।
+
+    প্রথমে ম্যানুয়াল সাবটাইটেল খোঁজে, না পেলে auto-generated।
+    ভাষা অগ্রাধিকার: বাংলা > ইংরেজি > হিন্দি > যেকোনো ভাষা।
+    """
+    video_id = extract_video_id(video_url)
+    if not video_id:
+        raise ValueError(f"YouTube video ID খুঁজে পাওয়া যায়নি: {video_url}")
+
+    logger.info("ট্রান্সক্রিপ্ট আনা হচ্ছে video_id=%s", video_id)
+
+    preferred_langs = ["bn", "en", "hi"]
+
+    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+    transcript = None
+
+    # ১. প্রথমে ম্যানুয়ালি তৈরি সাবটাইটেল খোঁজা (সবচেয়ে নির্ভুল)
     try:
-        return transcribe_audio(audio_path)
-    finally:
-        # temp ফাইল ক্লিনআপ
+        transcript = transcript_list.find_manually_created_transcript(preferred_langs)
+        logger.info("ম্যানুয়াল সাবটাইটেল পাওয়া গেছে: %s", transcript.language_code)
+    except Exception:
+        pass
+
+    # ২. না পেলে auto-generated সাবটাইটেল
+    if transcript is None:
         try:
-            os.remove(audio_path)
-        except OSError:
+            transcript = transcript_list.find_generated_transcript(preferred_langs)
+            logger.info("Auto-generated সাবটাইটেল পাওয়া গেছে: %s", transcript.language_code)
+        except Exception:
             pass
+
+    # ৩. তাও না পেলে যেকোনো ভাষার সাবটাইটেল নেওয়া
+    if transcript is None:
+        for t in transcript_list:
+            transcript = t
+            logger.info("ফলব্যাক সাবটাইটেল ব্যবহার হচ্ছে: %s", t.language_code)
+            break
+
+    if transcript is None:
+        raise ValueError(
+            f"এই ভিডিওতে কোনো সাবটাইটেল/ক্যাপশন পাওয়া যায়নি (video_id={video_id})। "
+            "ভিডিওতে সাবটাইটেল চালু আছে কিনা যাচাই করুন।"
+        )
+
+    entries = transcript.fetch()
+    text = " ".join(entry["text"] for entry in entries)
+    return text.strip()
