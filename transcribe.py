@@ -14,6 +14,31 @@ from faster_whisper import WhisperModel
 _WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
 _model = None
 
+# YouTube মাঝে মাঝে cloud/datacenter IP (যেমন Railway) থেকে আসা রিকোয়েস্ট বট মনে করে
+# ব্লক করে "Please sign in" এরর দেয়। এটা এড়াতে ব্রাউজার থেকে এক্সপোর্ট করা কুকি
+# ব্যবহার করা হয় — Railway Variables-এ YTDLP_COOKIES নামে বসাতে হবে।
+_COOKIES_ENV_VAR = "YTDLP_COOKIES"
+_cookies_file_path = None
+
+
+def _get_cookies_file() -> str | None:
+    """YTDLP_COOKIES env var থেকে কুকি পড়ে একটা temp ফাইলে লিখে সেই পাথ ফেরত দেয়।
+    env var সেট না থাকলে None ফেরত দেয় (তখন yt-dlp কুকি ছাড়াই চেষ্টা করবে)।
+    """
+    global _cookies_file_path
+    if _cookies_file_path and os.path.exists(_cookies_file_path):
+        return _cookies_file_path
+
+    cookies_content = os.getenv(_COOKIES_ENV_VAR)
+    if not cookies_content:
+        return None
+
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    with os.fdopen(fd, "w") as f:
+        f.write(cookies_content)
+    _cookies_file_path = path
+    return path
+
 
 def _get_model() -> WhisperModel:
     global _model
@@ -37,7 +62,16 @@ def download_audio(video_url: str) -> str:
         }],
         "quiet": True,
         "no_warnings": True,
+        # প্রতিবার নতুন ব্রাউজারের মতো user-agent পাঠানো bot-detection কমাতে সাহায্য করে
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
     }
+
+    cookies_path = _get_cookies_file()
+    if cookies_path:
+        ydl_opts["cookiefile"] = cookies_path
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([video_url])
