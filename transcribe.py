@@ -31,7 +31,6 @@ def extract_video_id(url: str) -> str | None:
 
 def transcribe_video(video_url: str) -> str:
     """YouTube সাবটাইটেল থেকে ট্রান্সক্রিপ্ট নেওয়া।
-
     প্রথমে ম্যানুয়াল সাবটাইটেল খোঁজে, না পেলে auto-generated।
     ভাষা অগ্রাধিকার: বাংলা > ইংরেজি > হিন্দি > যেকোনো ভাষা।
     """
@@ -42,9 +41,7 @@ def transcribe_video(video_url: str) -> str:
     logger.info("ট্রান্সক্রিপ্ট আনা হচ্ছে video_id=%s", video_id)
 
     preferred_langs = ["bn", "en", "hi"]
-
     transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
     transcript = None
 
     # ১. প্রথমে ম্যানুয়ালি তৈরি সাবটাইটেল খোঁজা (সবচেয়ে নির্ভুল)
