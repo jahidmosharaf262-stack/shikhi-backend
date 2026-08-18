@@ -155,26 +155,42 @@ def _transcribe_via_whisper(video_url: str) -> str:
     """
     from faster_whisper import WhisperModel  # requirements.txt এ যোগ করতে হবে
 
+    # YouTube মাঝে মাঝে নির্দিষ্ট player client (যেমন web) থেকে ফরম্যাট ব্লক করে
+    # দেয়, কিন্তু android/ios client দিয়ে কাজ করে। তাই কয়েকটা ক্লায়েন্ট
+    # ক্রমান্বয়ে চেষ্টা করা হচ্ছে -- প্রথমটা ব্যর্থ হলে পরেরটা।
+    player_clients = ["android", "ios", "web"]
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         out_template = os.path.join(tmp_dir, "audio.%(ext)s")
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "format": "bestaudio/best",
-            "outtmpl": out_template,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "128",
-                }
-            ],
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
-        except Exception as e:  # noqa: BLE001
-            raise ValueError(f"অডিও ডাউনলোড করতে ব্যর্থ: {e}") from e
+        last_error: Exception | None = None
+
+        for client in player_clients:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "format": "bestaudio/best",
+                "outtmpl": out_template,
+                "extractor_args": {"youtube": {"player_client": [client]}},
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "128",
+                    }
+                ],
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([video_url])
+                last_error = None
+                break  # সফল হলে আর অন্য ক্লায়েন্ট চেষ্টা করার দরকার নেই
+            except Exception as e:  # noqa: BLE001
+                logger.warning("player_client=%s দিয়ে অডিও ডাউনলোড ব্যর্থ: %s", client, e)
+                last_error = e
+                continue
+
+        if last_error is not None:
+            raise ValueError(f"অডিও ডাউনলোড করতে ব্যর্থ (সব client চেষ্টা করা হয়েছে): {last_error}") from last_error
 
         audio_files = glob.glob(os.path.join(tmp_dir, "audio.*"))
         if not audio_files:
