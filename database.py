@@ -69,7 +69,7 @@ def update_video_status(video_id: str, status: str, transcript: str = None, erro
 
 def list_videos() -> list:
     with get_conn() as conn:
-        rows = conn.execute("SELECT id, link, professional, topic, status FROM videos ORDER BY created_at ASC").fetchall()
+        rows = conn.execute("SELECT id, link, professional, topic, status, error FROM videos ORDER BY created_at ASC").fetchall()
         return [dict(r) for r in rows]
 
 
