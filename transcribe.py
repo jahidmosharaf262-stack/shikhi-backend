@@ -146,8 +146,14 @@ def _try_get_subtitles_via_ytdlp(video_url: str) -> str | None:
 def _transcribe_via_whisper(video_url: str) -> str:
     """সাবটাইটেল না থাকলে: অডিও ডাউনলোড করে Whisper দিয়ে ট্রান্সক্রাইব।
     এটা ধীর, কিন্তু যেকোনো ভিডিওর জন্য কাজ করে।
+
+    faster-whisper ব্যবহার করা হয়েছে (openai-whisper না) কারণ:
+      - openai-whisper এর torch ডিপেন্ডেন্সি Railway-র বিল্ড এনভায়রনমেন্টে
+        প্রায়ই সোর্স থেকে বিল্ড করতে গিয়ে ব্যর্থ হয়
+      - faster-whisper প্রি-বিল্ট wheel ব্যবহার করে (CTranslate2 ভিত্তিক),
+        তাই বিল্ড দ্রুত ও নির্ভরযোগ্য, আর রানটাইমেও কম RAM লাগে
     """
-    import whisper  # openai-whisper প্যাকেজ; requirements.txt এ যোগ করতে হবে
+    from faster_whisper import WhisperModel  # requirements.txt এ যোগ করতে হবে
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         out_template = os.path.join(tmp_dir, "audio.%(ext)s")
@@ -175,12 +181,14 @@ def _transcribe_via_whisper(video_url: str) -> str:
             raise ValueError("অডিও ফাইল ডাউনলোড হলেও খুঁজে পাওয়া যায়নি।")
         audio_path = audio_files[0]
 
-        logger.info("Whisper মডেল লোড হচ্ছে (base)...")
-        model = whisper.load_model("base")  # ছোট মডেল -> Railway তে দ্রুত ও কম মেমরি
+        logger.info("faster-whisper মডেল লোড হচ্ছে (base, int8)...")
+        # int8 quantization -> কম RAM, CPU-তেও দ্রুত। Railway-র জন্য উপযুক্ত।
+        model = WhisperModel("base", device="cpu", compute_type="int8")
         logger.info("Whisper দিয়ে ট্রান্সক্রাইব শুরু হচ্ছে...")
-        result = model.transcribe(audio_path, language=None)  # ভাষা auto-detect
+        segments, _info = model.transcribe(audio_path, language=None)  # ভাষা auto-detect
+        text = " ".join(segment.text.strip() for segment in segments)
 
-    text = (result.get("text") or "").strip()
+    text = text.strip()
     if not text:
         raise ValueError("Whisper থেকেও কোনো টেক্সট পাওয়া যায়নি।")
     return text
