@@ -13,6 +13,7 @@
   uvicorn main:app --reload
 """
 import os
+import traceback
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -58,6 +59,8 @@ def _process_video(video_id: str, link: str):
         rag.process_and_store_transcript(video_id, transcript)
         database.update_video_status(video_id, "ready")
     except Exception as e:  # noqa: BLE001
+        print(f"[VIDEO PROCESSING FAILED] video_id={video_id} link={link}")
+        print(traceback.format_exc())  # এটা এখন সরাসরি Railway Deploy Logs-এ দেখা যাবে
         database.update_video_status(video_id, "failed", error=str(e))
 
 
@@ -71,6 +74,14 @@ def add_video(payload: VideoIn, background_tasks: BackgroundTasks):
 @app.get("/videos")
 def get_videos():
     return database.list_videos()
+
+
+@app.get("/videos/{video_id}")
+def get_video_detail(video_id: str):
+    video = database.get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="ভিডিও পাওয়া যায়নি।")
+    return video
 
 
 @app.post("/chat")
